@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
+const http = require('http');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -44,6 +45,12 @@ bot.on('text', async (ctx) => {
     parse_mode: 'Markdown',
     ...WELCOME_KEYBOARD,
   });
+});
+
+// HTTP-сервер для Render (Web Service требует открытый порт)
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => res.end('ok')).listen(PORT, () => {
+  console.log(`HTTP health check on port ${PORT}`);
 });
 
 bot.launch().then(() => {
