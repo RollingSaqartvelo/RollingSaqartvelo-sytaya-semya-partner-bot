@@ -21,8 +21,9 @@ const WELCOME_TEXT =
   `• Вы сделаете пост с упоминанием нашего приложения и пришлёте его нашему администратору\n\n` +
   `👇 Подайте заявку — пришлём ссылку после проверки:`;
 
+const MAIN_BOT = process.env.MAIN_BOT_USERNAME || 'sitaya_semya_bot';
 const WELCOME_KEYBOARD = Markup.inlineKeyboard([
-  [Markup.button.url('📝 Подать заявку', 'https://t.me/hostapaytl')],
+  [Markup.button.url('📝 Подать заявку', `https://t.me/${MAIN_BOT}?start=apply`)],
   [Markup.button.url('✍️ Написать менеджеру', 'https://t.me/hostapaytl')],
 ]);
 
