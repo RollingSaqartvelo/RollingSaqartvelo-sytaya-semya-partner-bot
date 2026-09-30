@@ -534,7 +534,7 @@ bot.action(/^reject_(\d+)$/, async (ctx) => {
 // Admin command: /fixlink <tg_id> — create blogger code for existing partner if missing
 bot.command('fixlink', async (ctx) => {
   const isAdmin = ADMIN_IDS.includes(String(ctx.from.id));
-  if (!isAdmin) return;
+  if (!isAdmin) return ctx.reply('❌ Нет прав администратора. Твой ID: ' + ctx.from.id);
   const parts = ctx.message.text.split(' ');
   const tg_id = parts[1]?.trim();
   if (!tg_id) return ctx.reply('Использование: /fixlink <tg_id>');
