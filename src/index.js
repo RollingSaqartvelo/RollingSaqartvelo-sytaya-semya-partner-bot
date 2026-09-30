@@ -49,12 +49,15 @@ function apiCall(method, path, body = null) {
   });
 }
 
+const PARTNER_GROUP_LINK = process.env.PARTNER_GROUP_LINK || 'https://t.me/+UtC4SIPY9j0wYWJi';
+
 const api = {
-  stats:    (tg_id)  => apiCall('GET',  '/api/partner-stats', { tg_id }),
-  profile:  (tg_id)  => apiCall('GET',  '/api/partner/profile', { tg_id }),
-  register: (body)   => apiCall('POST', '/api/partner/register', body),
-  payout:   (tg_id)  => apiCall('POST', '/api/partner/payout', { tg_id }),
-  payouts:  (tg_id)  => apiCall('GET',  '/api/partner/payouts', { tg_id }),
+  stats:      (tg_id)  => apiCall('GET',  '/api/partner-stats', { tg_id }),
+  profile:    (tg_id)  => apiCall('GET',  '/api/partner/profile', { tg_id }),
+  register:   (body)   => apiCall('POST', '/api/partner/register', body),
+  ensureCode: (body)   => apiCall('POST', '/api/partner/ensure-code', body),
+  payout:     (tg_id)  => apiCall('POST', '/api/partner/payout', { tg_id }),
+  payouts:    (tg_id)  => apiCall('GET',  '/api/partner/payouts', { tg_id }),
 };
 
 // ── Texts ─────────────────────────────────────────────────────────────────────
@@ -465,11 +468,13 @@ bot.action(/^approve_(\d+)$/, async (ctx) => {
   pendingApps.delete(appId);
 
   // Регистрируем партнёра в основной базе
+  const tgUsername = app.username?.startsWith('@') ? app.username.slice(1) : null;
   const regResult = await api.register({
-    tg_id:     app.tg_id,
-    name:      app.name,
-    sbp_phone: app.phone,
-    sbp_bank:  app.bank,
+    tg_id:       app.tg_id,
+    name:        app.name,
+    sbp_phone:   app.phone,
+    sbp_bank:    app.bank,
+    tg_username: tgUsername,
   });
 
   if (!regResult.ok && regResult.error !== 'already_exists') {
@@ -479,7 +484,11 @@ bot.action(/^approve_(\d+)$/, async (ctx) => {
 
   // Получаем реферальную ссылку
   const stats = await api.stats(app.tg_id);
-  const refLink = stats.link || `https://t.me/${MAIN_BOT}?start=ref_${app.tg_id}`;
+  const refLink = stats.link;
+  if (!refLink) {
+    await ctx.editMessageText(ctx.callbackQuery.message.text + `\n\n❌ Ошибка получения ссылки: партнёр не найден в БД`, { parse_mode: 'HTML' });
+    return;
+  }
 
   // Уведомляем партнёра
   await bot.telegram.sendMessage(
@@ -488,6 +497,7 @@ bot.action(/^approve_(\d+)$/, async (ctx) => {
     `Вы стали партнёром Сытой Семьи 🚀\n\n` +
     `🔗 <b>Ваша реферальная ссылка:</b>\n<code>${refLink}</code>\n\n` +
     `Делитесь ею в соцсетях — вы получаете <b>20% с каждой оплаты</b> навсегда.\n\n` +
+    `👥 <b>Вступайте в закрытый чат партнёров:</b> ${PARTNER_GROUP_LINK}\n\n` +
     `📊 Статистика переходов и баланс — команда /stats\n` +
     `💸 Выплаты — команда /payout`,
     { parse_mode: 'HTML' }
@@ -519,6 +529,28 @@ bot.action(/^reject_(\d+)$/, async (ctx) => {
     ctx.callbackQuery.message.text + `\n\n❌ <b>Отклонено.</b> Заявитель уведомлён.`,
     { parse_mode: 'HTML' }
   );
+});
+
+// Admin command: /fixlink <tg_id> — create blogger code for existing partner if missing
+bot.command('fixlink', async (ctx) => {
+  const isAdmin = ADMIN_IDS.includes(String(ctx.from.id));
+  if (!isAdmin) return;
+  const parts = ctx.message.text.split(' ');
+  const tg_id = parts[1]?.trim();
+  if (!tg_id) return ctx.reply('Использование: /fixlink <tg_id>');
+  await ctx.reply('Создаю партнёрский код...');
+  const result = await api.ensureCode({ tg_id, tg_username: null, name: `partner${tg_id}` });
+  if (!result.ok) return ctx.reply(`❌ Ошибка: ${result.error || 'unknown'}`);
+  const status = result.already_existed ? 'Код уже существовал' : 'Код создан';
+  await ctx.reply(`✅ ${status}\n\n🔗 Ссылка: ${result.link}\n\nОтправь эту ссылку партнёру вручную.`);
+  // Send link to the partner directly
+  await bot.telegram.sendMessage(
+    tg_id,
+    `🔗 <b>Ваша реферальная ссылка:</b>\n<code>${result.link}</code>\n\n` +
+    `👥 Чат партнёров: ${PARTNER_GROUP_LINK}\n\n` +
+    `📊 Статистика — /stats\n💸 Выплаты — /payout`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
 });
 
 // Webhook mode on Render (no 409 conflicts), polling fallback locally
