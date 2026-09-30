@@ -14,6 +14,10 @@ const MIN_PAYOUT = 1000;
 const ADMIN_IDS = (process.env.ADMIN_TG_IDS || process.env.ADMIN_TG_ID || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
+// Временное хранилище заявок в памяти (очищается при рестарте)
+const pendingApps = new Map(); // appId → { tg_id, name, phone, bank, link, username, fullName }
+let appCounter = 0;
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 function apiCall(method, path, body = null) {
@@ -257,7 +261,19 @@ async function handleApplicationStep(ctx) {
     const user = ctx.from;
     const username = user.username ? `@${user.username}` : `tg://user?id=${user.id}`;
 
-    // Notify all admins
+    // Сохраняем заявку в памяти
+    const appId = String(++appCounter);
+    pendingApps.set(appId, {
+      tg_id:    user.id,
+      name:     apply_name,
+      phone:    apply_phone,
+      bank:     apply_bank,
+      link:     apply_link,
+      username,
+      fullName: [user.first_name, user.last_name].filter(Boolean).join(' '),
+    });
+
+    // Уведомляем всех админов с кнопками одобрить/отклонить
     const adminMsg =
       `🆕 <b>Новая заявка на партнёрство!</b>\n\n` +
       `👤 <b>ФИО:</b> ${apply_name}\n` +
@@ -266,8 +282,15 @@ async function handleApplicationStep(ctx) {
       `<b>Telegram:</b> ${username} (ID: ${user.id})\n` +
       `<b>Имя в TG:</b> ${[user.first_name, user.last_name].filter(Boolean).join(' ')}`;
 
+    const adminKeyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('✅ Одобрить', `approve_${appId}`),
+        Markup.button.callback('❌ Отклонить', `reject_${appId}`),
+      ],
+    ]);
+
     for (const adminId of ADMIN_IDS) {
-      await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'HTML' }).catch(() => {});
+      await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'HTML', ...adminKeyboard }).catch(() => {});
     }
 
     await ctx.reply(
@@ -429,6 +452,73 @@ bot.on('text', async (ctx) => {
   } else {
     await ctx.reply(WELCOME_TEXT, { parse_mode: 'Markdown', ...WELCOME_KEYBOARD });
   }
+});
+
+// ── Admin approve / reject ────────────────────────────────────────────────────
+
+bot.action(/^approve_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery('Обрабатываю...');
+  const appId = ctx.match[1];
+  const app = pendingApps.get(appId);
+  if (!app) return ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n⚠️ Заявка уже обработана или устарела.', { parse_mode: 'HTML' });
+
+  pendingApps.delete(appId);
+
+  // Регистрируем партнёра в основной базе
+  const regResult = await api.register({
+    tg_id:     app.tg_id,
+    name:      app.name,
+    sbp_phone: app.phone,
+    sbp_bank:  app.bank,
+  });
+
+  if (!regResult.ok && regResult.error !== 'already_exists') {
+    await ctx.editMessageText(ctx.callbackQuery.message.text + `\n\n❌ Ошибка регистрации: ${regResult.error || 'unknown'}`, { parse_mode: 'HTML' });
+    return;
+  }
+
+  // Получаем реферальную ссылку
+  const stats = await api.stats(app.tg_id);
+  const refLink = stats.link || `https://t.me/${MAIN_BOT}?start=ref_${app.tg_id}`;
+
+  // Уведомляем партнёра
+  await bot.telegram.sendMessage(
+    app.tg_id,
+    `🎉 <b>Ваша заявка одобрена!</b>\n\n` +
+    `Вы стали партнёром Сытой Семьи 🚀\n\n` +
+    `🔗 <b>Ваша реферальная ссылка:</b>\n<code>${refLink}</code>\n\n` +
+    `Делитесь ею в соцсетях — вы получаете <b>20% с каждой оплаты</b> навсегда.\n\n` +
+    `📊 Статистика переходов и баланс — команда /stats\n` +
+    `💸 Выплаты — команда /payout`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+
+  await ctx.editMessageText(
+    ctx.callbackQuery.message.text + `\n\n✅ <b>Одобрено!</b> Ссылка отправлена партнёру.`,
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.action(/^reject_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery('Отклонено');
+  const appId = ctx.match[1];
+  const app = pendingApps.get(appId);
+  if (!app) return ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n⚠️ Заявка уже обработана.', { parse_mode: 'HTML' });
+
+  pendingApps.delete(appId);
+
+  // Уведомляем заявителя
+  await bot.telegram.sendMessage(
+    app.tg_id,
+    `😔 К сожалению, ваша заявка на партнёрство не была одобрена.\n\n` +
+    `Если есть вопросы — напишите менеджеру @hostapaytl`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+
+  await ctx.editMessageText(
+    ctx.callbackQuery.message.text + `\n\n❌ <b>Отклонено.</b> Заявитель уведомлён.`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 // HTTP health check for Render
