@@ -521,15 +521,41 @@ bot.action(/^reject_(\d+)$/, async (ctx) => {
   );
 });
 
-// HTTP health check for Render
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('ok')).listen(PORT, () => {
-  console.log(`HTTP health check on port ${PORT}`);
-});
+// Webhook mode on Render (no 409 conflicts), polling fallback locally
+const PORT       = process.env.PORT || 3000;
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // auto-set by Render
 
-bot.launch().then(() => {
-  console.log('SytayaSemya_PartnerBot запущен ✅');
-});
+if (RENDER_URL) {
+  const webhookPath = '/tg-webhook';
+  const webhookUrl  = `${RENDER_URL}${webhookPath}`;
+
+  bot.telegram.setWebhook(webhookUrl).then(() => {
+    console.log(`Webhook set: ${webhookUrl}`);
+  });
+
+  http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === webhookPath) {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          await bot.handleUpdate(JSON.parse(body));
+        } catch (e) {
+          console.error('Webhook handle error:', e.message);
+        }
+        res.end('ok');
+      });
+    } else {
+      res.end('ok');
+    }
+  }).listen(PORT, () => {
+    console.log(`SytayaSemya_PartnerBot webhook mode on port ${PORT} ✅`);
+  });
+} else {
+  // Local dev: polling
+  http.createServer((req, res) => res.end('ok')).listen(PORT);
+  bot.launch().then(() => console.log('SytayaSemya_PartnerBot polling mode ✅'));
+}
 
 process.once('SIGINT',  () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
