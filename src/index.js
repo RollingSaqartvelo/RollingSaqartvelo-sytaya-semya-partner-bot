@@ -10,6 +10,7 @@ const MAIN_BOT   = process.env.MAIN_BOT_USERNAME  || 'sitaya_semya_bot';
 const MAIN_API   = process.env.MAIN_BOT_API_URL   || 'https://sytaya-semya-bot.onrender.com';
 const API_SECRET = process.env.PARTNER_API_SECRET || '';
 const MIN_PAYOUT = 1000;
+const ADMIN_TG_ID = process.env.ADMIN_TG_ID || null;
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ const WELCOME_TEXT =
   `👇 Подайте заявку:`;
 
 const WELCOME_KEYBOARD = Markup.inlineKeyboard([
-  [Markup.button.url('📝 Подать заявку', `https://t.me/${MAIN_BOT}?start=apply`)],
+  [Markup.button.callback('📝 Подать заявку', 'apply_start')],
   [Markup.button.url('✍️ Написать менеджеру', 'https://t.me/hostapaytl')],
 ]);
 
@@ -189,6 +190,105 @@ async function handleRegistrationStep(ctx) {
   }
 }
 
+// ── Application flow ──────────────────────────────────────────────────────────
+
+async function startApplication(ctx) {
+  ctx.session.apply_step = 'name';
+  ctx.session.apply_name = null;
+  ctx.session.apply_phone = null;
+  ctx.session.apply_bank = null;
+  ctx.session.apply_link = null;
+  await ctx.reply(
+    `📝 *Заявка на партнёрство*\n\n` +
+    `*Шаг 1 из 4.* Введите ваше _Имя и Фамилию_:\n` +
+    `_Пример: Анна Иванова_`,
+    { parse_mode: 'Markdown', ...Markup.forceReply() }
+  );
+}
+
+async function handleApplicationStep(ctx) {
+  const step = ctx.session?.apply_step;
+  const text = ctx.message?.text?.trim();
+  if (!text || !step) return false;
+
+  if (step === 'name') {
+    ctx.session.apply_name = text;
+    ctx.session.apply_step = 'phone';
+    await ctx.reply(
+      `✅ Отлично!\n\n*Шаг 2 из 4.* Введите номер телефона для СБП-перевода:\n_Пример: 79991234567_`,
+      { parse_mode: 'Markdown', ...Markup.forceReply() }
+    );
+    return true;
+  }
+
+  if (step === 'phone') {
+    const phone = text.replace(/\D/g, '');
+    if (phone.length < 10 || phone.length > 12) {
+      await ctx.reply('❌ Неверный формат. Введите номер цифрами, например: 79991234567');
+      return true;
+    }
+    ctx.session.apply_phone = phone;
+    ctx.session.apply_step = 'bank';
+    await ctx.reply(
+      `✅ Принято!\n\n*Шаг 3 из 4.* Укажите ваш банк:\n_Примеры: Сбербанк, Т-Банк, ВТБ, Альфа-Банк_`,
+      { parse_mode: 'Markdown', ...Markup.forceReply() }
+    );
+    return true;
+  }
+
+  if (step === 'bank') {
+    ctx.session.apply_bank = text;
+    ctx.session.apply_step = 'link';
+    await ctx.reply(
+      `✅ Принято!\n\n*Шаг 4 из 4.* Пришлите ссылку на ваши соцсети или на рилс/пост о нас:\n` +
+      `_Примеры: https://instagram.com/yourblog или https://t.me/yourchannel_`,
+      { parse_mode: 'Markdown', ...Markup.forceReply() }
+    );
+    return true;
+  }
+
+  if (step === 'link') {
+    ctx.session.apply_link = text;
+    ctx.session.apply_step = null;
+
+    const { apply_name, apply_phone, apply_bank, apply_link } = ctx.session;
+    const user = ctx.from;
+    const username = user.username ? `@${user.username}` : `tg://user?id=${user.id}`;
+
+    // Notify admin
+    if (ADMIN_TG_ID) {
+      await bot.telegram.sendMessage(
+        ADMIN_TG_ID,
+        `🆕 <b>Новая заявка на партнёрство!</b>\n\n` +
+        `👤 <b>ФИО:</b> ${apply_name}\n` +
+        `📱 <b>СБП:</b> ${apply_phone} (${apply_bank})\n` +
+        `🔗 <b>Соцсети/пост:</b> ${apply_link}\n\n` +
+        `<b>Telegram:</b> ${username} (ID: ${user.id})\n` +
+        `<b>Имя в TG:</b> ${[user.first_name, user.last_name].filter(Boolean).join(' ')}`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+
+    await ctx.reply(
+      `✅ *Заявка отправлена!*\n\n` +
+      `Мы проверим ваш профиль и свяжемся с вами в течение 1-2 рабочих дней.\n\n` +
+      `Если есть вопросы — напишите менеджеру @hostapaytl 👋`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([[Markup.button.url('✍️ Написать менеджеру', 'https://t.me/hostapaytl')]]),
+      }
+    );
+
+    ctx.session.apply_name = null;
+    ctx.session.apply_phone = null;
+    ctx.session.apply_bank = null;
+    ctx.session.apply_link = null;
+    return true;
+  }
+
+  return false;
+}
+
 // ── Payout flow ───────────────────────────────────────────────────────────────
 
 async function requestPayout(ctx) {
@@ -304,9 +404,20 @@ bot.action('do_payout', async (ctx) => {
   await requestPayout(ctx);
 });
 
-// Text handler: registration steps or smart response
+// Inline button: apply_start
+bot.action('apply_start', async (ctx) => {
+  await ctx.answerCbQuery();
+  await startApplication(ctx);
+});
+
+// Text handler: registration steps, application steps or smart response
 bot.on('text', async (ctx) => {
-  // If in registration flow → process step
+  // Application flow
+  if (ctx.session?.apply_step) {
+    return handleApplicationStep(ctx);
+  }
+
+  // SBP registration flow
   if (ctx.session?.step) {
     return handleRegistrationStep(ctx);
   }
