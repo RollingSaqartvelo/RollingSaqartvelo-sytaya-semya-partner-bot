@@ -10,7 +10,9 @@ const MAIN_BOT   = process.env.MAIN_BOT_USERNAME  || 'sitaya_semya_bot';
 const MAIN_API   = process.env.MAIN_BOT_API_URL   || 'https://sytaya-semya-bot.onrender.com';
 const API_SECRET = process.env.PARTNER_API_SECRET || '';
 const MIN_PAYOUT = 1000;
-const ADMIN_TG_ID = process.env.ADMIN_TG_ID || null;
+// Поддержка нескольких админов через запятую: "123456,930740884"
+const ADMIN_IDS = (process.env.ADMIN_TG_IDS || process.env.ADMIN_TG_ID || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -255,18 +257,17 @@ async function handleApplicationStep(ctx) {
     const user = ctx.from;
     const username = user.username ? `@${user.username}` : `tg://user?id=${user.id}`;
 
-    // Notify admin
-    if (ADMIN_TG_ID) {
-      await bot.telegram.sendMessage(
-        ADMIN_TG_ID,
-        `🆕 <b>Новая заявка на партнёрство!</b>\n\n` +
-        `👤 <b>ФИО:</b> ${apply_name}\n` +
-        `📱 <b>СБП:</b> ${apply_phone} (${apply_bank})\n` +
-        `🔗 <b>Соцсети/пост:</b> ${apply_link}\n\n` +
-        `<b>Telegram:</b> ${username} (ID: ${user.id})\n` +
-        `<b>Имя в TG:</b> ${[user.first_name, user.last_name].filter(Boolean).join(' ')}`,
-        { parse_mode: 'HTML' }
-      ).catch(() => {});
+    // Notify all admins
+    const adminMsg =
+      `🆕 <b>Новая заявка на партнёрство!</b>\n\n` +
+      `👤 <b>ФИО:</b> ${apply_name}\n` +
+      `📱 <b>СБП:</b> ${apply_phone} (${apply_bank})\n` +
+      `🔗 <b>Соцсети/пост:</b> ${apply_link}\n\n` +
+      `<b>Telegram:</b> ${username} (ID: ${user.id})\n` +
+      `<b>Имя в TG:</b> ${[user.first_name, user.last_name].filter(Boolean).join(' ')}`;
+
+    for (const adminId of ADMIN_IDS) {
+      await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'HTML' }).catch(() => {});
     }
 
     await ctx.reply(
