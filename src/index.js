@@ -437,6 +437,28 @@ bot.action('apply_start', async (ctx) => {
   await startApplication(ctx);
 });
 
+// Admin command: /fixlink <tg_id> — create blogger code for existing partner if missing
+// Must be before bot.on('text') to avoid being swallowed by the text handler
+bot.command('fixlink', async (ctx) => {
+  const isAdmin = ADMIN_IDS.includes(String(ctx.from.id));
+  if (!isAdmin) return ctx.reply('❌ Нет прав администратора. Твой ID: ' + ctx.from.id);
+  const parts = ctx.message.text.split(' ');
+  const tg_id = parts[1]?.trim();
+  if (!tg_id) return ctx.reply('Использование: /fixlink <tg_id>');
+  await ctx.reply('Создаю партнёрский код...');
+  const result = await api.ensureCode({ tg_id, tg_username: null, name: `partner${tg_id}` });
+  if (!result.ok) return ctx.reply(`❌ Ошибка: ${result.error || 'unknown'}`);
+  const status = result.already_existed ? 'Код уже существовал' : 'Код создан';
+  await ctx.reply(`✅ ${status}\n\n🔗 Ссылка: ${result.link}\n\nОтправь эту ссылку партнёру вручную.`);
+  await bot.telegram.sendMessage(
+    tg_id,
+    `🔗 <b>Ваша реферальная ссылка:</b>\n<code>${result.link}</code>\n\n` +
+    `👥 Чат партнёров: ${PARTNER_GROUP_LINK}\n\n` +
+    `📊 Статистика — /stats\n💸 Выплаты — /payout`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+});
+
 // Text handler: registration steps, application steps or smart response
 bot.on('text', async (ctx) => {
   // Application flow
@@ -531,27 +553,6 @@ bot.action(/^reject_(\d+)$/, async (ctx) => {
   );
 });
 
-// Admin command: /fixlink <tg_id> — create blogger code for existing partner if missing
-bot.command('fixlink', async (ctx) => {
-  const isAdmin = ADMIN_IDS.includes(String(ctx.from.id));
-  if (!isAdmin) return ctx.reply('❌ Нет прав администратора. Твой ID: ' + ctx.from.id);
-  const parts = ctx.message.text.split(' ');
-  const tg_id = parts[1]?.trim();
-  if (!tg_id) return ctx.reply('Использование: /fixlink <tg_id>');
-  await ctx.reply('Создаю партнёрский код...');
-  const result = await api.ensureCode({ tg_id, tg_username: null, name: `partner${tg_id}` });
-  if (!result.ok) return ctx.reply(`❌ Ошибка: ${result.error || 'unknown'}`);
-  const status = result.already_existed ? 'Код уже существовал' : 'Код создан';
-  await ctx.reply(`✅ ${status}\n\n🔗 Ссылка: ${result.link}\n\nОтправь эту ссылку партнёру вручную.`);
-  // Send link to the partner directly
-  await bot.telegram.sendMessage(
-    tg_id,
-    `🔗 <b>Ваша реферальная ссылка:</b>\n<code>${result.link}</code>\n\n` +
-    `👥 Чат партнёров: ${PARTNER_GROUP_LINK}\n\n` +
-    `📊 Статистика — /stats\n💸 Выплаты — /payout`,
-    { parse_mode: 'HTML' }
-  ).catch(() => {});
-});
 
 // Webhook mode on Render (no 409 conflicts), polling fallback locally
 const PORT       = process.env.PORT || 3000;
